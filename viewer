@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Default commands
+dir=ls
+file=cat
+page=less
+
+
+usage() {
+    cat <<EOF
+Usage: ${0##*/} [OPTIONS] ARG
+
+Options:
+  -h, --help    Show this message and exit
+EOF
+}
+
+# validate that a configured command works early
+require_cmd() {
+    # get command name and expand
+    local name="$1" value="${!1-}" word
+    # ensure non-empty
+    [[ -n "$value" ]] || { echo "$name is empty" >&2; exit 1; }
+    # extract first word of command
+    read -r word _ <<< "$value"
+    # test functionality
+    command -v "$word" >/dev/null 2>&1 || { echo "$name: command not found: $word" >&2; exit 1; }
+}
+
+run_cmd() {
+    local -a words
+    read -r -a words <<< "$1"
+    shift
+    local target="$1"
+    shift
+
+    # Try with passthrough flags, discarding stderr from the attempt
+    if "${words[@]}" "$@" "$target" 2>/dev/null; then
+        return 0
+    fi
+
+    # Fall back to no flags
+    "${words[@]}" "$target"
+}
+
+positional=()
+passthru=()
+
+# parse args
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            positional+=("$@")
+            break
+            ;;
+        -*)
+            passthru+=("$1")
+            shift
+            ;;
+        *)
+            positional+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# verify path provided
+if [[ ${#positional[@]} -ne 1 ]]; then
+    echo "Expected exactly one argument, got ${#positional[@]}" >&2
+    usage >&2
+    exit 1
+fi
+
+arg="${positional[0]}"
+
+# check for config overrides
+config="${XDG_CONFIG_HOME:-$HOME/.config}/viewer/config"
+if [[ -f "$config" ]]; then
+    . "$config"
+fi
+
+require_cmd dir
+require_cmd file
+require_cmd page
+
+if [ -d "$arg" ]; then
+    run_cmd "$dir" "$arg" "${passthru[@]+"${passthru[@]}"}"
+elif [ -f "$arg" ]; then
+    # use pager if more lines than terminal height
+    if [[ $(cat "$arg" | wc -l) -gt $(tput lines) ]]; then
+        run_cmd "$page" "$arg" "${passthru[@]+"${passthru[@]}"}"
+    else # o/w just cat
+        run_cmd "$file" "$arg" "${passthru[@]+"${passthru[@]}"}"
+    fi
+else
+    # not file or dir 
+    echo "\"$arg\": No such file or directory (os error 2)"
+    exit 1
+fi
